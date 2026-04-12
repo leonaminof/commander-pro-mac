@@ -148,8 +148,8 @@ ipcMain.handle('adb:devices', async () => {
 });
 
 ipcMain.handle('adb:readdir', async (_, serial, dirPath) => {
-  // Use ls -la for detailed listing
-  const out = await adb('-s', serial, 'shell', `ls -la "${dirPath}" 2>/dev/null`);
+  // -L follows symlinks so /sdcard (a symlink) lists its contents
+  const out = await adb('-s', serial, 'shell', `ls -laL "${dirPath}" 2>/dev/null`);
   return parseLsLa(out, dirPath);
 });
 

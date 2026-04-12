@@ -321,22 +321,32 @@ function handleRowClick(side, idx, entry, e) {
 async function handleRowDblClick(side, entry) {
   const s = state[side];
   const fullPath = path.join(s.cwd, entry.name);
+
   if (entry.isDirectory) {
     await navigate(side, fullPath);
-  } else {
-    if (s.android) {
-      // Pull to temp and open
-      const tmp = `/tmp/adb_open_${Date.now()}_${entry.name}`;
+    return;
+  }
+
+  if (s.android) {
+    // Symlinks may point to directories — try navigating first
+    if (entry.isSymlink) {
       try {
-        await window.api.adbPull(s.android.serial, fullPath, tmp);
-        await window.api.open(tmp);
-        dom.statusbar.textContent = `Opened ${entry.name} from Android (temp copy).`;
-      } catch (err) {
-        dom.statusbar.textContent = `Error opening file: ${err.message}`;
-      }
-    } else {
-      await window.api.open(fullPath);
+        await navigate(side, fullPath);
+        return;
+      } catch { /* not a directory, fall through to file open */ }
     }
+    // Pull file to temp and open; use basename of fullPath to avoid any slashes in name
+    const safeName = fullPath.split('/').pop() || 'file';
+    const tmp = `/tmp/adb_open_${Date.now()}_${safeName}`;
+    try {
+      await window.api.adbPull(s.android.serial, fullPath, tmp);
+      await window.api.open(tmp);
+      dom.statusbar.textContent = `Opened ${entry.name} from Android (temp copy).`;
+    } catch (err) {
+      dom.statusbar.textContent = `Error opening file: ${err.message}`;
+    }
+  } else {
+    await window.api.open(fullPath);
   }
 }
 
