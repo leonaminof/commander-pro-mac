@@ -59,6 +59,11 @@ async function init() {
     dom.list(side).addEventListener('keydown', e => handleListKey(side, e));
     dom.list(side).addEventListener('focus', () => { state.active = side; updateActivePaneStyle(); });
     dom.pane(side).addEventListener('mousedown', () => { state.active = side; updateActivePaneStyle(); });
+
+    // Android quick-nav buttons
+    document.querySelectorAll(`#android-quicknav-${side} .aqn-btn`).forEach(btn => {
+      btn.addEventListener('click', () => navigate(side, btn.dataset.path));
+    });
   }
 
   // Toolbar
@@ -162,6 +167,7 @@ async function navigate(side, dirPath) {
     renderBreadcrumb(side);
     renderList(side);
     updateStatus(side);
+    updateAndroidQuicknav(side);
   } catch (err) {
     dom.status(side).textContent = `Error: ${err.message}`;
   }
@@ -280,6 +286,11 @@ function updateStatus(side) {
 function updateActivePaneStyle() {
   document.querySelectorAll('.pane').forEach(p => p.classList.remove('pane-active'));
   dom.pane(state.active).classList.add('pane-active');
+}
+
+function updateAndroidQuicknav(side) {
+  const qn = $(`android-quicknav-${side}`);
+  qn.hidden = !state[side].android;
 }
 
 // ── Row interaction ───────────────────────────────────────────────────────────

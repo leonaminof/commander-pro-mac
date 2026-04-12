@@ -180,6 +180,37 @@ html, body {
   cursor: pointer;
 }
 
+/* ── Android quick-nav ─────────────────────────────────────── */
+.android-quicknav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(166,227,161,.07);
+  border-bottom: 1px solid rgba(166,227,161,.2);
+  flex-wrap: wrap;
+}
+.aqn-label {
+  font-size: 10px;
+  color: var(--green);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-right: 2px;
+}
+.aqn-btn {
+  background: rgba(166,227,161,.1);
+  border: 1px solid rgba(166,227,161,.25);
+  border-radius: 4px;
+  color: var(--green);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: background .1s;
+}
+.aqn-btn:hover { background: rgba(166,227,161,.22); }
+
 /* ── File list header ──────────────────────────────────────── */
 .file-list-header {
   display: flex;

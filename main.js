@@ -38,7 +38,8 @@ function parseLsLa(output, dirPath) {
     // skip total line
     if (line.startsWith('total')) continue;
     // format: permissions links owner group size date time name
-    const m = line.match(/^([dlrwx\-]{10})\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/);
+    // permissions can include s/S (setgid/setuid) and t/T (sticky)
+    const m = line.match(/^([dlrwxsStT\-]{10})\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/);
     if (!m) continue;
     const [, perms, sizeStr, dateStr, name] = m;
     if (name === '.' || name === '..') continue;
