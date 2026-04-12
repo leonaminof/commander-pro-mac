@@ -1,0 +1,22 @@
+{
+  "name": "commander-pro-mac",
+  "version": "1.0.0",
+  "description": "Dual-pane file manager for macOS, inspired by Commander Pro",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.leonam.commanderpro",
+    "productName": "Commander Pro",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"]
+    }
+  }
+}

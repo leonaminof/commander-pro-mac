@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Commander Pro</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ── Title bar ─────────────────────────────────────────────────── -->
+<div class="titlebar">
+  <div class="titlebar-traffic-lights"></div>
+  <span class="titlebar-title">Commander Pro</span>
+  <div class="titlebar-spacer"></div>
+</div>
+
+<!-- ── Toolbar ───────────────────────────────────────────────────── -->
+<div class="toolbar">
+  <button class="btn" id="btn-new-folder" title="New Folder (F7)">
+    <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.764c.958 0 1.76.56 2.115 1.35L9 4.5h4.5A1.5 1.5 0 0 1 15 6v6.5A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-9z"/></svg>
+    New Folder
+  </button>
+  <button class="btn" id="btn-copy" title="Copy (F5)">
+    <svg viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg>
+    Copy (F5)
+  </button>
+  <button class="btn" id="btn-move" title="Move (F6)">
+    <svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5zm14-7a.5.5 0 0 1-.5.5H2.707l3.147 3.146a.5.5 0 1 1-.708.708l-4-4a.5.5 0 0 1 0-.708l4-4a.5.5 0 1 1 .708.708L2.707 4H14.5a.5.5 0 0 1 .5.5z"/></svg>
+    Move (F6)
+  </button>
+  <button class="btn" id="btn-rename" title="Rename">
+    <svg viewBox="0 0 16 16"><path d="M13.498.795l.149-.149a1.207 1.207 0 1 1 1.707 1.708l-.149.148a1.5 1.5 0 0 1-.059 2.059L4.854 14.854a.5.5 0 0 1-.233.131l-4 1a.5.5 0 0 1-.606-.606l1-4a.5.5 0 0 1 .131-.232l9.642-9.642a.5.5 0 0 0-.642.056L6.854 4.854a.5.5 0 1 1-.708-.708L9.44.854A1.5 1.5 0 0 1 11.5.796a1.5 1.5 0 0 1 1.998-.001z"/></svg>
+    Rename
+  </button>
+  <button class="btn btn-danger" id="btn-delete" title="Delete (F8)">
+    <svg viewBox="0 0 16 16"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
+    Delete (F8)
+  </button>
+  <div class="toolbar-sep"></div>
+  <button class="btn" id="btn-open-finder" title="Show in Finder">
+    <svg viewBox="0 0 16 16"><path d="M1 8a7 7 0 1 0 14 0A7 7 0 0 0 1 8zm15 0A8 8 0 1 1 0 8a8 8 0 0 1 16 0zm-4.5-.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H11.5z"/></svg>
+    Finder
+  </button>
+  <button class="btn" id="btn-refresh" title="Refresh">
+    <svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg>
+    Refresh
+  </button>
+  <div class="toolbar-sep"></div>
+  <div class="search-box">
+    <svg viewBox="0 0 16 16"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>
+    <input type="text" id="search-input" placeholder="Filter...">
+  </div>
+</div>
+
+<!-- ── Main area ──────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- Left pane -->
+  <div class="pane" id="pane-left" data-side="left">
+    <div class="pane-header">
+      <div class="breadcrumb" id="breadcrumb-left"></div>
+      <div class="pane-drive-select">
+        <select id="drive-left"></select>
+      </div>
+    </div>
+    <div class="file-list-header">
+      <span class="col-name">Name</span>
+      <span class="col-size">Size</span>
+      <span class="col-date">Modified</span>
+    </div>
+    <div class="file-list" id="list-left" tabindex="0"></div>
+    <div class="pane-status" id="status-left"></div>
+  </div>
+
+  <!-- Divider -->
+  <div class="divider" id="divider"></div>
+
+  <!-- Right pane -->
+  <div class="pane" id="pane-right" data-side="right">
+    <div class="pane-header">
+      <div class="breadcrumb" id="breadcrumb-right"></div>
+      <div class="pane-drive-select">
+        <select id="drive-right"></select>
+      </div>
+    </div>
+    <div class="file-list-header">
+      <span class="col-name">Name</span>
+      <span class="col-size">Size</span>
+      <span class="col-date">Modified</span>
+    </div>
+    <div class="file-list" id="list-right" tabindex="0"></div>
+    <div class="pane-status" id="status-right"></div>
+  </div>
+
+</div>
+
+<!-- ── Preview panel ─────────────────────────────────────────────── -->
+<div class="preview-panel" id="preview-panel">
+  <div class="preview-header">
+    <span id="preview-filename">Preview</span>
+    <button class="preview-close" id="preview-close">✕</button>
+  </div>
+  <div class="preview-content" id="preview-content"></div>
+</div>
+
+<!-- ── Status bar ────────────────────────────────────────────────── -->
+<div class="statusbar">
+  <span id="statusbar-left">Ready</span>
+  <span id="statusbar-keys">F5 Copy · F6 Move · F7 New Folder · F8 Delete · F3 Preview · Enter Open</span>
+</div>
+
+<!-- ── Modal ─────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal-backdrop" hidden>
+  <div class="modal" id="modal">
+    <div class="modal-title" id="modal-title">Input</div>
+    <input class="modal-input" id="modal-input" type="text">
+    <div class="modal-buttons">
+      <button class="btn" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
