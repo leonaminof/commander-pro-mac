@@ -11,16 +11,19 @@ const path = {
   extname: (p)    => { const b = p.split('/').pop(); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i) : ''; }
 };
 
-// ── State ────────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
+// cwd for android panes is a plain unix path (e.g. /sdcard)
+// pane.android = { serial, model } when in android mode, else null
 
 const state = {
-  left:  { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '' },
-  right: { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '' },
-  active: 'left',   // which pane has focus
-  previewOpen: false
+  left:  { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null },
+  right: { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null },
+  active: 'left',
+  previewOpen: false,
+  androidDevices: [],
 };
 
-// ── DOM refs ─────────────────────────────────────────────────────────────────
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 
 const $ = id => document.getElementById(id);
 
@@ -42,29 +45,35 @@ const dom = {
   modalCancel:$('modal-cancel'),
 };
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
   const home = await window.api.homedir();
   const volumes = await window.api.volumes();
 
+  // Detect Android devices
+  await refreshAndroidDevices(volumes);
+
   for (const side of ['left', 'right']) {
-    populateDrives(side, volumes);
-    dom.drive(side).addEventListener('change', e => navigate(side, e.target.value));
+    dom.drive(side).addEventListener('change', e => handleDriveChange(side, e.target.value));
     dom.list(side).addEventListener('keydown', e => handleListKey(side, e));
     dom.list(side).addEventListener('focus', () => { state.active = side; updateActivePaneStyle(); });
     dom.pane(side).addEventListener('mousedown', () => { state.active = side; updateActivePaneStyle(); });
   }
 
-  // Toolbar buttons
-  $('btn-copy').addEventListener('click', () => operationCopyMove('copy'));
-  $('btn-move').addEventListener('click', () => operationCopyMove('move'));
-  $('btn-delete').addEventListener('click', () => operationDelete());
-  $('btn-rename').addEventListener('click', () => operationRename());
+  // Toolbar
+  $('btn-copy').addEventListener('click',       () => operationCopyMove('copy'));
+  $('btn-move').addEventListener('click',       () => operationCopyMove('move'));
+  $('btn-delete').addEventListener('click',     () => operationDelete());
+  $('btn-rename').addEventListener('click',     () => operationRename());
   $('btn-new-folder').addEventListener('click', () => operationNewFolder());
-  $('btn-refresh').addEventListener('click', () => { reload('left'); reload('right'); });
+  $('btn-refresh').addEventListener('click',    async () => {
+    await refreshAndroidDevices();
+    reload('left'); reload('right');
+  });
   $('btn-open-finder').addEventListener('click', () => {
     const s = state[state.active];
+    if (s.android) return; // can't open android path in Finder
     const target = s.selected.size ? [...s.selected][0] : s.cwd;
     window.api.showInFinder(target);
   });
@@ -72,7 +81,7 @@ async function init() {
   // Preview close
   $('preview-close').addEventListener('click', closePreview);
 
-  // Modal buttons
+  // Modal
   dom.modalCancel.addEventListener('click', () => resolveModal(null));
   dom.modalOk.addEventListener('click',     () => resolveModal(dom.modalInput.value));
   dom.modalInput.addEventListener('keydown', e => {
@@ -80,40 +89,79 @@ async function init() {
     if (e.key === 'Escape') resolveModal(null);
   });
 
-  // Search filter
+  // Filter
   dom.searchInput.addEventListener('input', e => {
     state[state.active].filter = e.target.value.toLowerCase();
     renderList(state.active);
   });
 
-  // Global keyboard shortcuts
   document.addEventListener('keydown', handleGlobalKey);
-
-  // Divider drag resize
   setupDividerDrag();
 
-  // Navigate both panes to home
   await Promise.all([navigate('left', home), navigate('right', home)]);
   dom.list('left').focus();
 }
 
-// ── Navigation ───────────────────────────────────────────────────────────────
+// ── Android device detection ──────────────────────────────────────────────────
+
+async function refreshAndroidDevices(existingVolumes) {
+  const devices = await window.api.adbDevices();
+  state.androidDevices = devices;
+
+  const volumes = existingVolumes || await window.api.volumes();
+
+  for (const side of ['left', 'right']) {
+    populateDrives(side, volumes, devices);
+  }
+}
+
+function isAndroidSerial(val) {
+  return val && val.startsWith('android:');
+}
+
+function parseAndroidDriveValue(val) {
+  // format: "android:<serial>"
+  const serial = val.replace('android:', '');
+  return serial;
+}
+
+async function handleDriveChange(side, val) {
+  if (isAndroidSerial(val)) {
+    const serial = parseAndroidDriveValue(val);
+    const device = state.androidDevices.find(d => d.serial === serial);
+    if (!device) return;
+    if (device.status !== 'device') {
+      dom.status(side).textContent = `Device unauthorized — accept "Allow USB debugging" on your phone.`;
+      return;
+    }
+    state[side].android = { serial };
+    await navigate(side, '/sdcard');
+  } else {
+    state[side].android = null;
+    await navigate(side, val);
+  }
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
 
 async function navigate(side, dirPath) {
+  const s = state[side];
   try {
-    const entries = await window.api.readdir(dirPath);
-    state[side].cwd = dirPath;
-    state[side].entries = entries;
-    state[side].selected.clear();
-    state[side].cursor = 0;
-    state[side].filter = '';
+    let entries;
+    if (s.android) {
+      entries = await window.api.adbReaddir(s.android.serial, dirPath);
+    } else {
+      entries = await window.api.readdir(dirPath);
+    }
+    s.cwd = dirPath;
+    s.entries = entries;
+    s.selected.clear();
+    s.cursor = 0;
+    s.filter = '';
     dom.searchInput.value = '';
     renderBreadcrumb(side);
     renderList(side);
     updateStatus(side);
-    // sync drive select
-    const vol = getVolumeForPath(dirPath);
-    if (vol) dom.drive(side).value = vol;
   } catch (err) {
     dom.status(side).textContent = `Error: ${err.message}`;
   }
@@ -130,20 +178,17 @@ function goUp(side) {
 
 function otherSide(side) { return side === 'left' ? 'right' : 'left'; }
 
-// ── Rendering ────────────────────────────────────────────────────────────────
+// ── Rendering ─────────────────────────────────────────────────────────────────
 
 function renderList(side) {
   const s = state[side];
   const container = dom.list(side);
   const filter = s.filter;
-
-  const visible = s.entries.filter(e =>
-    !filter || e.name.toLowerCase().includes(filter)
-  );
+  const visible = s.entries.filter(e => !filter || e.name.toLowerCase().includes(filter));
 
   container.innerHTML = '';
 
-  // ".." entry
+  // ".." row
   const upRow = document.createElement('div');
   upRow.className = 'file-row up-row';
   upRow.innerHTML = `<span class="col-name"><span class="icon">📁</span>..</span><span class="col-size"></span><span class="col-date"></span>`;
@@ -155,12 +200,13 @@ function renderList(side) {
     const row = document.createElement('div');
     row.className = 'file-row';
     row.dataset.idx = idx;
-    row.dataset.path = path.join(s.cwd, entry.name);
+    const fullPath = path.join(s.cwd, entry.name);
+    row.dataset.path = fullPath;
 
-    if (s.selected.has(path.join(s.cwd, entry.name))) row.classList.add('selected');
+    if (s.selected.has(fullPath)) row.classList.add('selected');
     if (idx === s.cursor) row.classList.add('cursor');
 
-    const icon = entry.isDirectory ? '📁' : getFileIcon(entry.name);
+    const icon = entry.isDirectory ? '📁' : (entry.isSymlink ? '🔗' : getFileIcon(entry.name));
     const size = entry.isDirectory ? '<DIR>' : formatSize(entry.size);
     const date = formatDate(entry.mtime);
 
@@ -175,15 +221,22 @@ function renderList(side) {
     container.appendChild(row);
   });
 
-  // scroll cursor into view
   const cursorRow = container.querySelectorAll('.file-row')[s.cursor + 1];
   if (cursorRow) cursorRow.scrollIntoView({ block: 'nearest' });
 }
 
 function renderBreadcrumb(side) {
-  const parts = state[side].cwd.split('/').filter(Boolean);
+  const s = state[side];
+  const parts = s.cwd.split('/').filter(Boolean);
   const bc = dom.breadcrumb(side);
   bc.innerHTML = '';
+
+  if (s.android) {
+    const androidLabel = document.createElement('span');
+    androidLabel.className = 'bc-part bc-android';
+    androidLabel.textContent = `📱 ${s.android.serial}`;
+    bc.appendChild(androidLabel);
+  }
 
   const rootSpan = document.createElement('span');
   rootSpan.className = 'bc-part';
@@ -210,7 +263,8 @@ function renderBreadcrumb(side) {
 
 function updateStatus(side) {
   const s = state[side];
-  const dirs = s.entries.filter(e => e.isDirectory).length;
+  const prefix = s.android ? `📱 Android · ` : '';
+  const dirs  = s.entries.filter(e => e.isDirectory).length;
   const files = s.entries.filter(e => !e.isDirectory).length;
   const selCount = s.selected.size;
   const selSize = [...s.selected].reduce((acc, p) => {
@@ -218,9 +272,9 @@ function updateStatus(side) {
     const entry = s.entries.find(e => e.name === name);
     return acc + (entry && !entry.isDirectory ? entry.size : 0);
   }, 0);
-  dom.status(side).textContent = selCount
+  dom.status(side).textContent = prefix + (selCount
     ? `${selCount} selected (${formatSize(selSize)}) | ${dirs} dirs, ${files} files`
-    : `${dirs} dirs, ${files} files`;
+    : `${dirs} dirs, ${files} files`);
 }
 
 function updateActivePaneStyle() {
@@ -240,9 +294,7 @@ function handleRowClick(side, idx, entry, e) {
     const start = Math.min(s.cursor, idx);
     const end   = Math.max(s.cursor, idx);
     const visible = s.entries.filter(en => !s.filter || en.name.toLowerCase().includes(s.filter));
-    for (let i = start; i <= end; i++) {
-      s.selected.add(path.join(s.cwd, visible[i].name));
-    }
+    for (let i = start; i <= end; i++) s.selected.add(path.join(s.cwd, visible[i].name));
   } else if (e.metaKey || e.ctrlKey) {
     if (s.selected.has(fullPath)) s.selected.delete(fullPath);
     else s.selected.add(fullPath);
@@ -250,22 +302,34 @@ function handleRowClick(side, idx, entry, e) {
     s.selected.clear();
     s.selected.add(fullPath);
   }
-
   s.cursor = idx;
-  renderList(side);
-  updateStatus(side);
+  renderList(side); updateStatus(side);
   dom.list(side).focus();
 }
 
 async function handleRowDblClick(side, entry) {
+  const s = state[side];
+  const fullPath = path.join(s.cwd, entry.name);
   if (entry.isDirectory) {
-    await navigate(side, path.join(state[side].cwd, entry.name));
+    await navigate(side, fullPath);
   } else {
-    await window.api.open(path.join(state[side].cwd, entry.name));
+    if (s.android) {
+      // Pull to temp and open
+      const tmp = `/tmp/adb_open_${Date.now()}_${entry.name}`;
+      try {
+        await window.api.adbPull(s.android.serial, fullPath, tmp);
+        await window.api.open(tmp);
+        dom.statusbar.textContent = `Opened ${entry.name} from Android (temp copy).`;
+      } catch (err) {
+        dom.statusbar.textContent = `Error opening file: ${err.message}`;
+      }
+    } else {
+      await window.api.open(fullPath);
+    }
   }
 }
 
-// ── Keyboard handling ─────────────────────────────────────────────────────────
+// ── Keyboard ──────────────────────────────────────────────────────────────────
 
 function handleListKey(side, e) {
   const s = state[side];
@@ -278,33 +342,24 @@ function handleListKey(side, e) {
       if (s.cursor > 0) s.cursor--;
       else { goUp(side); return; }
       if (!e.shiftKey) s.selected.clear();
-      if (visible[s.cursor]) {
-        if (e.shiftKey) s.selected.add(path.join(s.cwd, visible[s.cursor].name));
-        else s.selected.add(path.join(s.cwd, visible[s.cursor].name));
-      }
+      if (visible[s.cursor]) s.selected.add(path.join(s.cwd, visible[s.cursor].name));
       renderList(side); updateStatus(side);
       break;
-
     case 'ArrowDown':
       e.preventDefault();
       if (s.cursor < max) s.cursor++;
       if (!e.shiftKey) s.selected.clear();
-      if (visible[s.cursor]) {
-        s.selected.add(path.join(s.cwd, visible[s.cursor].name));
-      }
+      if (visible[s.cursor]) s.selected.add(path.join(s.cwd, visible[s.cursor].name));
       renderList(side); updateStatus(side);
       break;
-
     case 'Enter':
       e.preventDefault();
       if (visible[s.cursor]) handleRowDblClick(side, visible[s.cursor]);
       break;
-
     case 'Backspace':
       e.preventDefault();
       goUp(side);
       break;
-
     case ' ':
       e.preventDefault();
       if (visible[s.cursor]) {
@@ -315,7 +370,6 @@ function handleListKey(side, e) {
         renderList(side); updateStatus(side);
       }
       break;
-
     case 'Tab':
       e.preventDefault();
       state.active = otherSide(side);
@@ -326,8 +380,7 @@ function handleListKey(side, e) {
 }
 
 function handleGlobalKey(e) {
-  if (dom.modal.hidden === false) return; // modal open
-
+  if (!dom.modal.hidden) return;
   switch (e.key) {
     case 'F5': e.preventDefault(); operationCopyMove('copy'); break;
     case 'F6': e.preventDefault(); operationCopyMove('move'); break;
@@ -341,33 +394,55 @@ function handleGlobalKey(e) {
 // ── File operations ───────────────────────────────────────────────────────────
 
 async function operationCopyMove(op) {
-  const src = state[state.active];
-  const dst = state[otherSide(state.active)];
-  const targets = src.selected.size ? [...src.selected] : [];
+  const srcSide = state.active;
+  const dstSide = otherSide(srcSide);
+  const src = state[srcSide];
+  const dst = state[dstSide];
 
+  const targets = src.selected.size ? [...src.selected] : [];
   if (!targets.length) {
     const visible = src.entries.filter(e => !src.filter || e.name.toLowerCase().includes(src.filter));
     const cur = visible[src.cursor];
     if (cur) targets.push(path.join(src.cwd, cur.name));
   }
-
   if (!targets.length) return;
 
   const names = targets.map(p => path.basename(p)).join(', ');
+  const srcLabel = src.android ? `📱 Android:${src.cwd}` : src.cwd;
+  const dstLabel = dst.android ? `📱 Android:${dst.cwd}` : dst.cwd;
+
   const confirmed = await window.api.confirm(
     `${op === 'copy' ? 'Copy' : 'Move'} ${targets.length} item(s)?`,
-    `From: ${src.cwd}\nTo:   ${dst.cwd}\n\n${names}`
+    `From: ${srcLabel}\nTo:   ${dstLabel}\n\n${names}`
   );
   if (!confirmed) return;
 
   try {
     for (const t of targets) {
-      const dest = path.join(dst.cwd, path.basename(t));
-      if (op === 'copy') await window.api.copy(t, dest);
-      else               await window.api.move(t, dest);
+      const destPath = path.join(dst.cwd, path.basename(t));
+
+      if (!src.android && !dst.android) {
+        // local → local
+        if (op === 'copy') await window.api.copy(t, destPath);
+        else               await window.api.move(t, destPath);
+      } else if (src.android && !dst.android) {
+        // android → local (pull)
+        await window.api.adbPull(src.android.serial, t, destPath);
+        if (op === 'move') await window.api.adbDelete(src.android.serial, t);
+      } else if (!src.android && dst.android) {
+        // local → android (push)
+        await window.api.adbPush(dst.android.serial, t, destPath);
+        if (op === 'move') await window.api.delete(t);
+      } else {
+        // android → android (pull to tmp, push)
+        const tmp = `/tmp/adb_xfer_${Date.now()}_${path.basename(t)}`;
+        await window.api.adbPull(src.android.serial, t, tmp);
+        await window.api.adbPush(dst.android.serial, tmp, destPath);
+        await window.api.delete(tmp);
+        if (op === 'move') await window.api.adbDelete(src.android.serial, t);
+      }
     }
-    await reload('left');
-    await reload('right');
+    await reload('left'); await reload('right');
     dom.statusbar.textContent = `${op === 'copy' ? 'Copied' : 'Moved'} ${targets.length} item(s).`;
   } catch (err) {
     dom.statusbar.textContent = `Error: ${err.message}`;
@@ -384,15 +459,17 @@ async function operationDelete() {
   }
   if (!targets.length) return;
 
-  const names = targets.map(p => path.basename(p)).join(', ');
   const confirmed = await window.api.confirm(
     `Delete ${targets.length} item(s) permanently?`,
-    names
+    targets.map(p => path.basename(p)).join(', ')
   );
   if (!confirmed) return;
 
   try {
-    for (const t of targets) await window.api.delete(t);
+    for (const t of targets) {
+      if (s.android) await window.api.adbDelete(s.android.serial, t);
+      else           await window.api.delete(t);
+    }
     await reload(state.active);
     dom.statusbar.textContent = `Deleted ${targets.length} item(s).`;
   } catch (err) {
@@ -405,14 +482,13 @@ async function operationRename() {
   const visible = s.entries.filter(e => !s.filter || e.name.toLowerCase().includes(s.filter));
   const cur = visible[s.cursor];
   if (!cur) return;
-
   const newName = await promptModal('Rename', cur.name);
   if (!newName || newName === cur.name) return;
-
+  const oldPath = path.join(s.cwd, cur.name);
+  const newPath = path.join(s.cwd, newName);
   try {
-    const oldPath = path.join(s.cwd, cur.name);
-    const newPath = path.join(s.cwd, newName);
-    await window.api.rename(oldPath, newPath);
+    if (s.android) await window.api.adbRename(s.android.serial, oldPath, newPath);
+    else           await window.api.rename(oldPath, newPath);
     await reload(state.active);
     dom.statusbar.textContent = `Renamed to ${newName}`;
   } catch (err) {
@@ -424,9 +500,10 @@ async function operationNewFolder() {
   const s = state[state.active];
   const name = await promptModal('New Folder', 'New Folder');
   if (!name) return;
-
+  const newPath = path.join(s.cwd, name);
   try {
-    await window.api.mkdir(path.join(s.cwd, name));
+    if (s.android) await window.api.adbMkdir(s.android.serial, newPath);
+    else           await window.api.mkdir(newPath);
     await reload(state.active);
     dom.statusbar.textContent = `Created folder: ${name}`;
   } catch (err) {
@@ -444,20 +521,26 @@ async function togglePreview() {
   if (!cur || cur.isDirectory) return;
 
   const filePath = path.join(s.cwd, cur.name);
-  dom.previewFile.textContent = cur.name;
+  dom.previewFile.textContent = (s.android ? '📱 ' : '') + cur.name;
   dom.previewContent.innerHTML = '<div class="preview-loading">Loading…</div>';
   dom.preview.classList.add('open');
   state.previewOpen = true;
 
   const ext = path.extname(cur.name).toLowerCase();
-  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'];
-  if (imageExts.includes(ext)) {
+  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
+
+  if (!s.android && imageExts.includes(ext)) {
     dom.previewContent.innerHTML = `<img src="file://${filePath}" alt="${escHtml(cur.name)}">`;
     return;
   }
 
   try {
-    const text = await window.api.readfile(filePath);
+    let text;
+    if (s.android) {
+      text = await window.api.adbReadfile(s.android.serial, filePath);
+    } else {
+      text = await window.api.readfile(filePath);
+    }
     if (text === null) {
       dom.previewContent.innerHTML = '<div class="preview-loading">File too large to preview.</div>';
       return;
@@ -473,7 +556,7 @@ function closePreview() {
   state.previewOpen = false;
 }
 
-// ── Modal (prompt) ────────────────────────────────────────────────────────────
+// ── Modal ─────────────────────────────────────────────────────────────────────
 
 let _modalResolve = null;
 
@@ -483,10 +566,7 @@ function promptModal(title, defaultValue = '') {
     dom.modalTitle.textContent = title;
     dom.modalInput.value = defaultValue;
     dom.modal.hidden = false;
-    setTimeout(() => {
-      dom.modalInput.focus();
-      dom.modalInput.select();
-    }, 30);
+    setTimeout(() => { dom.modalInput.focus(); dom.modalInput.select(); }, 30);
   });
 }
 
@@ -499,12 +579,23 @@ function resolveModal(value) {
 
 let _volumes = [];
 
-function populateDrives(side, volumes) {
+function populateDrives(side, volumes, androidDevices = []) {
   _volumes = volumes;
   const sel = dom.drive(side);
-  sel.innerHTML = volumes.map(v =>
+  const localOpts = volumes.map(v =>
     `<option value="${escAttr(v.path)}">${escHtml(v.name)}</option>`
   ).join('');
+
+  const androidOpts = androidDevices.map(d => {
+    const label = d.status === 'device'
+      ? `📱 Android (${d.serial})`
+      : `📱 Android — ${d.status} (${d.serial})`;
+    return `<option value="android:${escAttr(d.serial)}">${escHtml(label)}</option>`;
+  }).join('');
+
+  sel.innerHTML = localOpts + (androidOpts
+    ? `<optgroup label="── Android ──">${androidOpts}</optgroup>`
+    : '');
 }
 
 function getVolumeForPath(p) {
@@ -523,22 +614,19 @@ function setupDividerDrag() {
   let dragging = false, startX = 0, startLeft = 0;
 
   divider.addEventListener('mousedown', e => {
-    dragging = true;
-    startX = e.clientX;
+    dragging = true; startX = e.clientX;
     startLeft = dom.pane('left').getBoundingClientRect().width;
     document.body.style.cursor = 'col-resize';
     e.preventDefault();
   });
-
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const totalW = main.getBoundingClientRect().width;
     const newLeft = Math.max(200, Math.min(totalW - 200, startLeft + (e.clientX - startX)));
     const pct = (newLeft / totalW) * 100;
-    dom.pane('left').style.flex = `0 0 ${pct}%`;
+    dom.pane('left').style.flex  = `0 0 ${pct}%`;
     dom.pane('right').style.flex = `0 0 ${100 - pct}%`;
   });
-
   document.addEventListener('mouseup', () => {
     if (dragging) { dragging = false; document.body.style.cursor = ''; }
   });
@@ -548,16 +636,14 @@ function setupDividerDrag() {
 
 function formatSize(bytes) {
   if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 function formatDate(ms) {
   if (!ms) return '';
-  const d = new Date(ms);
-  const pad = n => String(n).padStart(2, '0');
+  const d = new Date(ms), pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
@@ -566,24 +652,19 @@ function escHtml(str) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
 function escAttr(str) { return escHtml(str); }
 
 function getFileIcon(name) {
   const ext = (name.split('.').pop() || '').toLowerCase();
   const map = {
-    js: '🟨', ts: '🔷', jsx: '⚛️', tsx: '⚛️',
-    py: '🐍', rb: '💎', go: '🐹', rs: '🦀',
-    html: '🌐', css: '🎨', json: '📋', md: '📝',
-    txt: '📄', pdf: '📕', doc: '📘', docx: '📘',
-    xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
-    zip: '📦', tar: '📦', gz: '📦', rar: '📦',
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️',
-    svg: '🖼️', webp: '🖼️', ico: '🖼️',
-    mp3: '🎵', wav: '🎵', flac: '🎵', m4a: '🎵',
-    mp4: '🎬', mov: '🎬', avi: '🎬', mkv: '🎬',
-    sh: '💻', bash: '💻', zsh: '💻',
-    dmg: '💿', app: '🖥️', pkg: '📦',
+    js:'🟨', ts:'🔷', jsx:'⚛️', tsx:'⚛️', py:'🐍', rb:'💎', go:'🐹', rs:'🦀',
+    html:'🌐', css:'🎨', json:'📋', md:'📝', txt:'📄', pdf:'📕',
+    doc:'📘', docx:'📘', xls:'📗', xlsx:'📗', ppt:'📙', pptx:'📙',
+    zip:'📦', tar:'📦', gz:'📦', rar:'📦', '7z':'📦',
+    png:'🖼️', jpg:'🖼️', jpeg:'🖼️', gif:'🖼️', svg:'🖼️', webp:'🖼️',
+    mp3:'🎵', wav:'🎵', flac:'🎵', m4a:'🎵', aac:'🎵',
+    mp4:'🎬', mov:'🎬', avi:'🎬', mkv:'🎬',
+    apk:'📱', sh:'💻', dmg:'💿', app:'🖥️', pkg:'📦',
   };
   return map[ext] || '📄';
 }

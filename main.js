@@ -2,6 +2,65 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFile, execFileSync } = require('child_process');
+
+// ── ADB helper ────────────────────────────────────────────────────────────────
+
+const ADB_PATHS = [
+  '/opt/homebrew/bin/adb',
+  '/usr/local/bin/adb',
+  '/usr/bin/adb',
+];
+
+function findAdb() {
+  for (const p of ADB_PATHS) {
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+  }
+  return 'adb'; // fallback – hope it's in PATH
+}
+
+const ADB = findAdb();
+
+function adb(...args) {
+  return new Promise((resolve, reject) => {
+    execFile(ADB, args, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+// Parse `adb shell ls -la` output into entry objects
+function parseLsLa(output, dirPath) {
+  const lines = output.split('\n').filter(Boolean);
+  const entries = [];
+  for (const line of lines) {
+    // skip total line
+    if (line.startsWith('total')) continue;
+    // format: permissions links owner group size date time name
+    const m = line.match(/^([dlrwx\-]{10})\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/);
+    if (!m) continue;
+    const [, perms, sizeStr, dateStr, name] = m;
+    if (name === '.' || name === '..') continue;
+    // handle symlinks: "name -> target"
+    const realName = name.split(' -> ')[0];
+    const isDir  = perms[0] === 'd';
+    const isLink = perms[0] === 'l';
+    const mtime  = new Date(dateStr).getTime();
+    entries.push({
+      name: realName,
+      isDirectory: isDir,
+      isSymlink: isLink,
+      size: parseInt(sizeStr, 10) || 0,
+      mtime,
+      mode: 0,
+    });
+  }
+  return entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
 
 let mainWindow;
 
@@ -62,13 +121,72 @@ ipcMain.handle('fs:readdir', async (_, dirPath) => {
 ipcMain.handle('fs:homedir', () => os.homedir());
 
 ipcMain.handle('fs:volumes', async () => {
+  const vols = [];
   if (process.platform === 'darwin') {
     try {
-      const vols = fs.readdirSync('/Volumes');
-      return vols.map(v => ({ name: v, path: `/Volumes/${v}` }));
-    } catch { return [{ name: 'Macintosh HD', path: '/' }]; }
+      const names = fs.readdirSync('/Volumes');
+      for (const v of names) vols.push({ name: v, path: `/Volumes/${v}`, type: 'local' });
+    } catch { vols.push({ name: 'Macintosh HD', path: '/', type: 'local' }); }
+  } else {
+    vols.push({ name: 'Root', path: '/', type: 'local' });
   }
-  return [{ name: 'Root', path: '/' }];
+  return vols;
+});
+
+// ── ADB IPC ───────────────────────────────────────────────────────────────────
+
+ipcMain.handle('adb:devices', async () => {
+  try {
+    const out = await adb('devices');
+    const lines = out.split('\n').slice(1).filter(l => l.trim() && !l.startsWith('*'));
+    return lines.map(l => {
+      const [serial, status] = l.trim().split(/\s+/);
+      return { serial, status };
+    }).filter(d => d.serial);
+  } catch { return []; }
+});
+
+ipcMain.handle('adb:readdir', async (_, serial, dirPath) => {
+  // Use ls -la for detailed listing
+  const out = await adb('-s', serial, 'shell', `ls -la "${dirPath}" 2>/dev/null`);
+  return parseLsLa(out, dirPath);
+});
+
+ipcMain.handle('adb:mkdir', async (_, serial, dirPath) => {
+  await adb('-s', serial, 'shell', `mkdir -p "${dirPath}"`);
+});
+
+ipcMain.handle('adb:rename', async (_, serial, oldPath, newPath) => {
+  await adb('-s', serial, 'shell', `mv "${oldPath}" "${newPath}"`);
+});
+
+ipcMain.handle('adb:delete', async (_, serial, filePath) => {
+  await adb('-s', serial, 'shell', `rm -rf "${filePath}"`);
+});
+
+ipcMain.handle('adb:pull', async (_, serial, remotePath, localPath) => {
+  // pull to a temp dir then copy
+  await adb('-s', serial, 'pull', remotePath, localPath);
+});
+
+ipcMain.handle('adb:push', async (_, serial, localPath, remotePath) => {
+  await adb('-s', serial, 'push', localPath, remotePath);
+});
+
+ipcMain.handle('adb:readfile', async (_, serial, remotePath) => {
+  // Pull to temp, read, delete
+  const tmp = path.join(os.tmpdir(), `adb_preview_${Date.now()}`);
+  try {
+    await adb('-s', serial, 'pull', remotePath, tmp);
+    const stat = fs.statSync(tmp);
+    if (stat.size > 2 * 1024 * 1024) { fs.unlinkSync(tmp); return null; }
+    const content = fs.readFileSync(tmp, 'utf8');
+    fs.unlinkSync(tmp);
+    return content;
+  } catch {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw new Error('Cannot read file from device');
+  }
 });
 
 ipcMain.handle('fs:mkdir', async (_, dirPath) => {

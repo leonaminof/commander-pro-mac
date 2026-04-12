@@ -166,6 +166,7 @@ html, body {
 .bc-part:hover { color: var(--accent); background: rgba(137,180,250,.1); }
 .bc-current { color: var(--text); font-weight: 600; max-width: none; }
 .bc-sep { color: var(--text-dim); font-size: 10px; }
+.bc-android { color: var(--green); background: rgba(166,227,161,.12); border-radius: 4px; padding: 1px 5px; font-weight: 600; cursor: default; max-width: none; }
 
 .pane-drive-select select {
   background: var(--surface);
