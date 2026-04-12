@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('api', {
   readfile:    (p)       => ipcRenderer.invoke('fs:readfile', p),
   confirm:     (m, d)    => ipcRenderer.invoke('dialog:confirm', m, d),
 
+  // Progress events
+  onProgress: (cb) => ipcRenderer.on('progress:update', (_, data) => cb(data)),
+
   // Android (ADB)
   adbDevices:  ()              => ipcRenderer.invoke('adb:devices'),
   adbReaddir:  (s, p)          => ipcRenderer.invoke('adb:readdir', s, p),

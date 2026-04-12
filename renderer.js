@@ -43,6 +43,12 @@ const dom = {
   modalInput: $('modal-input'),
   modalOk:    $('modal-ok'),
   modalCancel:$('modal-cancel'),
+  progressOverlay: $('progress-overlay'),
+  progressOp:      $('progress-op'),
+  progressFilename:$('progress-filename'),
+  progressPct:     $('progress-pct'),
+  progressBar:     $('progress-bar'),
+  progressDetail:  $('progress-detail'),
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -102,6 +108,22 @@ async function init() {
 
   document.addEventListener('keydown', handleGlobalKey);
   setupDividerDrag();
+
+  // Progress listener
+  let progressDoneTimer = null;
+  window.api.onProgress(({ percent, filename, detail, op }) => {
+    dom.progressOverlay.hidden = false;
+    dom.progressBar.classList.remove('indeterminate');
+    dom.progressOp.textContent = op || (percent < 100 ? 'Copying' : 'Done');
+    dom.progressFilename.textContent = filename || '';
+    dom.progressPct.textContent = `${percent}%`;
+    dom.progressBar.style.width = `${percent}%`;
+    dom.progressDetail.textContent = detail || '';
+    clearTimeout(progressDoneTimer);
+    if (percent >= 100) {
+      progressDoneTimer = setTimeout(() => { dom.progressOverlay.hidden = true; }, 1800);
+    }
+  });
 
   await Promise.all([navigate('left', home), navigate('right', home)]);
   dom.list('left').focus();
@@ -437,6 +459,15 @@ async function operationCopyMove(op) {
     `From: ${srcLabel}\nTo:   ${dstLabel}\n\n${names}`
   );
   if (!confirmed) return;
+
+  // Show indeterminate bar immediately
+  dom.progressOverlay.hidden = false;
+  dom.progressOp.textContent = op === 'copy' ? 'Copying' : 'Moving';
+  dom.progressFilename.textContent = names.length > 40 ? names.slice(0, 40) + '…' : names;
+  dom.progressPct.textContent = '0%';
+  dom.progressBar.style.width = '0%';
+  dom.progressBar.classList.add('indeterminate');
+  dom.progressDetail.textContent = '';
 
   try {
     for (const t of targets) {

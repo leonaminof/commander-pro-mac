@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execFile, execFileSync } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 // ── ADB helper ────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,53 @@ function adb(...args) {
       if (err) reject(new Error(stderr || err.message));
       else resolve(stdout);
     });
+  });
+}
+
+// adb with live progress — calls onProgress(percent, detail) from stderr
+function adbWithProgress(args, onProgress) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ADB, args);
+    let stderr = '';
+    proc.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      stderr += text;
+      // adb progress lines: "[ 42%] /remote/path"
+      for (const line of text.split('\n')) {
+        const m = line.match(/\[\s*(\d+)%\]\s*(.*)/);
+        if (m) onProgress(parseInt(m[1], 10), m[2].trim());
+      }
+    });
+    proc.stdout.on('data', () => {});
+    proc.on('close', code => {
+      if (code === 0) { onProgress(100, ''); resolve(); }
+      else reject(new Error(stderr.trim() || `adb exited ${code}`));
+    });
+  });
+}
+
+// Streaming local file copy with progress callback
+function copyFileWithProgress(src, dest, onProgress) {
+  return new Promise((resolve, reject) => {
+    let stat;
+    try { stat = fs.statSync(src); } catch (e) { return reject(e); }
+    const total = stat.size;
+    if (total === 0) { fs.copyFileSync(src, dest); onProgress(100, 0, 0); return resolve(); }
+    let copied = 0;
+    const start = Date.now();
+    const r = fs.createReadStream(src);
+    const w = fs.createWriteStream(dest);
+    r.on('data', chunk => {
+      copied += chunk.length;
+      const pct = Math.round((copied / total) * 100);
+      const elapsed = (Date.now() - start) / 1000 || 0.001;
+      const speed = copied / elapsed;
+      onProgress(pct, copied, speed);
+    });
+    r.on('error', reject);
+    w.on('error', reject);
+    w.on('finish', resolve);
+    r.pipe(w);
   });
 }
 
@@ -166,12 +213,19 @@ ipcMain.handle('adb:delete', async (_, serial, filePath) => {
 });
 
 ipcMain.handle('adb:pull', async (_, serial, remotePath, localPath) => {
-  // pull to a temp dir then copy
-  await adb('-s', serial, 'pull', remotePath, localPath);
+  const name = remotePath.split('/').pop();
+  await adbWithProgress(
+    ['-s', serial, 'pull', remotePath, localPath],
+    (pct, detail) => sendProgress(pct, name, detail, pct < 100 ? `Pulling from Android…` : '')
+  );
 });
 
 ipcMain.handle('adb:push', async (_, serial, localPath, remotePath) => {
-  await adb('-s', serial, 'push', localPath, remotePath);
+  const name = localPath.split('/').pop();
+  await adbWithProgress(
+    ['-s', serial, 'push', localPath, remotePath],
+    (pct, detail) => sendProgress(pct, name, detail, pct < 100 ? `Pushing to Android…` : '')
+  );
 });
 
 ipcMain.handle('adb:readfile', async (_, serial, remotePath) => {
@@ -208,21 +262,18 @@ ipcMain.handle('fs:delete', async (_, filePath) => {
 });
 
 ipcMain.handle('fs:copy', async (_, src, dest) => {
-  copyRecursive(src, dest);
+  await copyRecursiveWithProgress(src, dest);
 });
 
 ipcMain.handle('fs:move', async (_, src, dest) => {
   try {
     fs.renameSync(src, dest);
+    sendProgress(100, path.basename(src), path.basename(src), '');
   } catch {
-    // cross-device move: copy then delete
-    copyRecursive(src, dest);
+    await copyRecursiveWithProgress(src, dest);
     const stat = fs.statSync(src);
-    if (stat.isDirectory()) {
-      fs.rmSync(src, { recursive: true, force: true });
-    } else {
-      fs.unlinkSync(src);
-    }
+    if (stat.isDirectory()) fs.rmSync(src, { recursive: true, force: true });
+    else fs.unlinkSync(src);
   }
 });
 
@@ -260,14 +311,47 @@ ipcMain.handle('dialog:mkdir', async () => null);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function copyRecursive(src, dest) {
+function sendProgress(percent, filename, detail, op) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('progress:update', { percent, filename, detail, op });
+  }
+}
+
+async function copyRecursiveWithProgress(src, dest, _collected) {
+  // First pass: collect all files to know total size
+  if (!_collected) {
+    const files = [];
+    collectFiles(src, dest, files);
+    const totalBytes = files.reduce((s, f) => s + f.size, 0);
+    let doneBytes = 0;
+    const start = Date.now();
+    for (const { from, to, size, name } of files) {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      await copyFileWithProgress(from, to, (pct, copied, speed) => {
+        const overall = Math.round(((doneBytes + copied) / (totalBytes || 1)) * 100);
+        const speedStr = speed > 0 ? ` · ${formatBytes(speed)}/s` : '';
+        sendProgress(overall, name, `${formatBytes(doneBytes + copied)} / ${formatBytes(totalBytes)}${speedStr}`, '');
+      });
+      doneBytes += size;
+    }
+    sendProgress(100, path.basename(src), '', '');
+  }
+}
+
+function collectFiles(src, dest, out) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
-    fs.mkdirSync(dest, { recursive: true });
     for (const child of fs.readdirSync(src)) {
-      copyRecursive(path.join(src, child), path.join(dest, child));
+      collectFiles(path.join(src, child), path.join(dest, child), out);
     }
   } else {
-    fs.copyFileSync(src, dest);
+    out.push({ from: src, to: dest, size: stat.size, name: path.basename(src) });
   }
+}
+
+function formatBytes(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 ** 3) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return `${(b / 1024 ** 3).toFixed(2)} GB`;
 }
