@@ -374,6 +374,101 @@ html, body {
   text-align: center;
 }
 
+/* ── Network button ────────────────────────────────────────── */
+.btn-network { color: var(--accent2); }
+.btn-network:hover { border-color: var(--accent2); background: rgba(203,166,247,.1); }
+
+/* ── Network modal ─────────────────────────────────────────── */
+.net-modal {
+  width: 780px;
+  max-width: 95vw;
+  padding: 0;
+  overflow: hidden;
+}
+.net-modal-layout {
+  display: flex;
+  height: 480px;
+}
+.net-sidebar {
+  width: 220px;
+  background: var(--bg3);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.net-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  border-bottom: 1px solid var(--border);
+}
+.net-add-btn { padding: 2px 8px; font-size: 11px; }
+.net-conn-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.net-conn-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  border-radius: 0;
+  transition: background .1s;
+}
+.net-conn-item:hover { background: var(--surface); }
+.net-conn-item.active { background: rgba(137,180,250,.15); border-left: 2px solid var(--accent); }
+.net-conn-item.connected { color: var(--green); }
+.net-conn-icon { font-size: 16px; flex-shrink: 0; }
+.net-conn-info { flex: 1; overflow: hidden; }
+.net-conn-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.net-conn-host { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.net-conn-badge { font-size: 9px; background: var(--green); color: var(--bg3); border-radius: 3px; padding: 1px 4px; font-weight: 700; }
+
+/* Form */
+.net-form {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.net-field { display: flex; flex-direction: column; gap: 4px; }
+.net-field label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.net-field input, .net-field select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  outline: none;
+}
+.net-field input:focus, .net-field select:focus { border-color: var(--accent); }
+.net-field select { cursor: pointer; }
+.net-hint { color: var(--surface2); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.net-row { display: flex; gap: 10px; }
+.net-field-grow { flex: 1; }
+.net-field-port { width: 80px; }
+.net-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.net-status {
+  font-size: 12px;
+  min-height: 20px;
+  padding: 4px 0;
+}
+.net-status.ok { color: var(--green); }
+.net-status.err { color: var(--red); }
+.net-status.busy { color: var(--yellow); }
+
+/* Breadcrumb network badge */
+.bc-network { color: var(--accent2); background: rgba(203,166,247,.12); border-radius: 4px; padding: 1px 5px; font-weight: 600; cursor: default; max-width: none; }
+
 /* ── Progress overlay ──────────────────────────────────────── */
 .progress-overlay {
   background: var(--bg2);

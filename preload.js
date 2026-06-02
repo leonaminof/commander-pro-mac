@@ -27,4 +27,18 @@ contextBridge.exposeInMainWorld('api', {
   adbPull:     (s, remote, local) => ipcRenderer.invoke('adb:pull', s, remote, local),
   adbPush:     (s, local, remote) => ipcRenderer.invoke('adb:push', s, local, remote),
   adbReadfile: (s, p)          => ipcRenderer.invoke('adb:readfile', s, p),
+
+  // Network connections
+  netListConnections: ()           => ipcRenderer.invoke('net:list-connections'),
+  netSaveConnection:  (c)          => ipcRenderer.invoke('net:save-connection', c),
+  netDeleteConnection:(id)         => ipcRenderer.invoke('net:delete-connection', id),
+  netConnect:         (c)          => ipcRenderer.invoke('net:connect', c),
+  netDisconnect:      (id)         => ipcRenderer.invoke('net:disconnect', id),
+  netReaddir:         (id, p)      => ipcRenderer.invoke('net:readdir', id, p),
+  netMkdir:           (id, p)      => ipcRenderer.invoke('net:mkdir', id, p),
+  netRename:          (id, o, n)   => ipcRenderer.invoke('net:rename', id, o, n),
+  netDelete:          (id, p)      => ipcRenderer.invoke('net:delete', id, p),
+  netDownload:        (id, r, l)   => ipcRenderer.invoke('net:download', id, r, l),
+  netUpload:          (id, l, r)   => ipcRenderer.invoke('net:upload', id, l, r),
+  netReadfile:        (id, p)      => ipcRenderer.invoke('net:readfile', id, p),
 });

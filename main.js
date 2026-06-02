@@ -4,6 +4,26 @@ const fs = require('fs');
 const os = require('os');
 const { execFile, spawn } = require('child_process');
 
+// ── Network (lazy-loaded) ─────────────────────────────────────────────────────
+let SftpClient = null;
+let ftp = null;
+function getSftp() { if (!SftpClient) SftpClient = require('ssh2-sftp-client'); return SftpClient; }
+function getFtp()  { if (!ftp) ftp = require('basic-ftp'); return ftp; }
+
+// Active SFTP/FTP sessions keyed by connectionId
+const netSessions = {};
+
+// Saved connections stored in userData
+function connectionsFile() {
+  return path.join(app.getPath('userData'), 'connections.json');
+}
+function loadConnections() {
+  try { return JSON.parse(fs.readFileSync(connectionsFile(), 'utf8')); } catch { return []; }
+}
+function saveConnections(list) {
+  fs.writeFileSync(connectionsFile(), JSON.stringify(list, null, 2));
+}
+
 // ── ADB helper ────────────────────────────────────────────────────────────────
 
 const ADB_PATHS = [
@@ -303,11 +323,214 @@ ipcMain.handle('dialog:confirm', async (_, message, detail) => {
 });
 
 ipcMain.handle('dialog:rename', async (_, currentName) => {
-  // We'll handle rename input in the renderer via a custom modal
   return null;
 });
 
 ipcMain.handle('dialog:mkdir', async () => null);
+
+// ── Network IPC ───────────────────────────────────────────────────────────────
+
+ipcMain.handle('net:list-connections', () => loadConnections());
+
+ipcMain.handle('net:save-connection', (_, conn) => {
+  const list = loadConnections();
+  const idx = list.findIndex(c => c.id === conn.id);
+  if (idx >= 0) list[idx] = conn; else list.push(conn);
+  saveConnections(list);
+  return list;
+});
+
+ipcMain.handle('net:delete-connection', (_, id) => {
+  const list = loadConnections().filter(c => c.id !== id);
+  saveConnections(list);
+  return list;
+});
+
+ipcMain.handle('net:connect', async (_, conn) => {
+  const { id, protocol, host, port, username, password, share } = conn;
+  if (netSessions[id]) return { ok: true, mountPath: netSessions[id].mountPath };
+
+  if (protocol === 'sftp') {
+    const Sftp = getSftp();
+    const client = new Sftp();
+    await client.connect({ host, port: port || 22, username, password, readyTimeout: 10000 });
+    netSessions[id] = { type: 'sftp', client };
+    return { ok: true };
+  }
+
+  if (protocol === 'ftp' || protocol === 'ftps') {
+    const { Client } = getFtp();
+    const client = new Client();
+    client.ftp.verbose = false;
+    await client.access({ host, port: port || 21, user: username, password, secure: protocol === 'ftps' });
+    netSessions[id] = { type: 'ftp', client };
+    return { ok: true };
+  }
+
+  if (protocol === 'smb') {
+    // Use macOS native mount_smbfs → browseable as local filesystem
+    const safeName = host.replace(/[^a-z0-9]/gi, '_');
+    const mountPoint = path.join(os.tmpdir(), `cpm_smb_${safeName}_${id}`);
+    fs.mkdirSync(mountPoint, { recursive: true });
+    const shareStr = share ? share.replace(/^\//, '') : '';
+    const userPass = username ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : '';
+    const smbUrl  = `//${userPass}${host}/${shareStr}`;
+    await new Promise((res, rej) => {
+      execFile('mount_smbfs', [smbUrl, mountPoint], err => err ? rej(new Error(err.message)) : res());
+    });
+    netSessions[id] = { type: 'smb', mountPath: mountPoint };
+    return { ok: true, mountPath: mountPoint };
+  }
+
+  throw new Error(`Unsupported protocol: ${protocol}`);
+});
+
+ipcMain.handle('net:disconnect', async (_, id) => {
+  const sess = netSessions[id];
+  if (!sess) return;
+  try {
+    if (sess.type === 'sftp') await sess.client.end();
+    if (sess.type === 'ftp')  sess.client.close();
+    if (sess.type === 'smb')  await new Promise(r => execFile('umount', [sess.mountPath], () => r()));
+  } catch {}
+  delete netSessions[id];
+});
+
+ipcMain.handle('net:readdir', async (_, id, dirPath) => {
+  const sess = netSessions[id];
+  if (!sess) throw new Error('Not connected');
+
+  if (sess.type === 'sftp') {
+    const list = await sess.client.list(dirPath || '/');
+    return list.map(f => ({
+      name: f.name, isDirectory: f.type === 'd', isSymlink: f.type === 'l',
+      size: f.size, mtime: f.modifyTime, mode: f.rights
+    })).filter(f => f.name !== '.' && f.name !== '..').sort((a,b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  if (sess.type === 'ftp') {
+    const list = await sess.client.list(dirPath || '/');
+    return list.map(f => ({
+      name: f.name, isDirectory: f.isDirectory, isSymlink: false,
+      size: f.size, mtime: f.modifiedAt ? new Date(f.modifiedAt).getTime() : 0, mode: 0
+    })).filter(f => f.name !== '.' && f.name !== '..').sort((a,b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  // SMB: browse the mount point as local filesystem
+  if (sess.type === 'smb') {
+    const localPath = dirPath || sess.mountPath;
+    const entries = fs.readdirSync(localPath, { withFileTypes: true });
+    return entries.map(e => {
+      const fp = path.join(localPath, e.name);
+      let stat = null; try { stat = fs.statSync(fp); } catch {}
+      return { name: e.name, isDirectory: e.isDirectory(), isSymlink: e.isSymbolicLink(),
+               size: stat ? stat.size : 0, mtime: stat ? stat.mtimeMs : 0 };
+    }).sort((a,b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+});
+
+ipcMain.handle('net:mkdir', async (_, id, dirPath) => {
+  const sess = netSessions[id];
+  if (sess.type === 'sftp') await sess.client.mkdir(dirPath, true);
+  else if (sess.type === 'ftp') await sess.client.ensureDir(dirPath);
+  else if (sess.type === 'smb') fs.mkdirSync(dirPath, { recursive: true });
+});
+
+ipcMain.handle('net:rename', async (_, id, oldPath, newPath) => {
+  const sess = netSessions[id];
+  if (sess.type === 'sftp') await sess.client.rename(oldPath, newPath);
+  else if (sess.type === 'ftp') await sess.client.rename(oldPath, newPath);
+  else if (sess.type === 'smb') fs.renameSync(oldPath, newPath);
+});
+
+ipcMain.handle('net:delete', async (_, id, remotePath) => {
+  const sess = netSessions[id];
+  if (sess.type === 'sftp') {
+    const stat = await sess.client.stat(remotePath);
+    if (stat.isDirectory) await sess.client.rmdir(remotePath, true);
+    else await sess.client.delete(remotePath);
+  } else if (sess.type === 'ftp') {
+    try { await sess.client.removeDir(remotePath); }
+    catch { await sess.client.remove(remotePath); }
+  } else if (sess.type === 'smb') {
+    const st = fs.statSync(remotePath);
+    if (st.isDirectory()) fs.rmSync(remotePath, { recursive: true, force: true });
+    else fs.unlinkSync(remotePath);
+  }
+});
+
+ipcMain.handle('net:download', async (_, id, remotePath, localPath) => {
+  const name = remotePath.split('/').pop();
+  const sess = netSessions[id];
+  sendProgress(0, name, 'Downloading…', 'Downloading');
+  if (sess.type === 'sftp') {
+    await sess.client.fastGet(remotePath, localPath, {
+      step: (transferred, chunk, total) => {
+        sendProgress(Math.round(transferred/total*100), name, `${formatBytes(transferred)} / ${formatBytes(total)}`, 'Downloading');
+      }
+    });
+  } else if (sess.type === 'ftp') {
+    await sess.client.downloadTo(localPath, remotePath);
+  } else if (sess.type === 'smb') {
+    await copyRecursiveWithProgress(remotePath, localPath);
+  }
+  sendProgress(100, name, '', 'Done');
+});
+
+ipcMain.handle('net:upload', async (_, id, localPath, remotePath) => {
+  const name = localPath.split('/').pop();
+  const sess = netSessions[id];
+  sendProgress(0, name, 'Uploading…', 'Uploading');
+  if (sess.type === 'sftp') {
+    const stat = fs.statSync(localPath);
+    await sess.client.fastPut(localPath, remotePath, {
+      step: (transferred, chunk, total) => {
+        sendProgress(Math.round(transferred/total*100), name, `${formatBytes(transferred)} / ${formatBytes(total)}`, 'Uploading');
+      }
+    });
+  } else if (sess.type === 'ftp') {
+    await sess.client.uploadFrom(localPath, remotePath);
+  } else if (sess.type === 'smb') {
+    await copyRecursiveWithProgress(localPath, remotePath);
+  }
+  sendProgress(100, name, '', 'Done');
+});
+
+ipcMain.handle('net:readfile', async (_, id, remotePath) => {
+  const sess = netSessions[id];
+  const tmp = path.join(os.tmpdir(), `cpm_preview_${Date.now()}`);
+  try {
+    if (sess.type === 'sftp') await sess.client.fastGet(remotePath, tmp);
+    else if (sess.type === 'ftp') await sess.client.downloadTo(tmp, remotePath);
+    else if (sess.type === 'smb') fs.copyFileSync(remotePath, tmp);
+    const stat = fs.statSync(tmp);
+    if (stat.size > 2 * 1024 * 1024) { fs.unlinkSync(tmp); return null; }
+    const content = fs.readFileSync(tmp, 'utf8');
+    fs.unlinkSync(tmp);
+    return content;
+  } catch { try { fs.unlinkSync(tmp); } catch {} throw new Error('Cannot preview remote file'); }
+});
+
+// Disconnect all on quit
+app.on('before-quit', async () => {
+  for (const id of Object.keys(netSessions)) {
+    try {
+      const sess = netSessions[id];
+      if (sess.type === 'sftp') await sess.client.end();
+      if (sess.type === 'ftp')  sess.client.close();
+      if (sess.type === 'smb')  execFile('umount', [sess.mountPath], () => {});
+    } catch {}
+  }
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

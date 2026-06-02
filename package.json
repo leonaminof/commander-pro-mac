@@ -8,6 +8,10 @@
     "package": "electron-packager . 'Commander Pro' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/icon.icns",
     "build": "electron-builder --mac"
   },
+  "dependencies": {
+    "ssh2-sftp-client": "^10.0.3",
+    "basic-ftp": "^5.0.5"
+  },
   "devDependencies": {
     "electron": "^29.0.0",
     "electron-builder": "^24.0.0",

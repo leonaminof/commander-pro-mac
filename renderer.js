@@ -16,8 +16,8 @@ const path = {
 // pane.android = { serial, model } when in android mode, else null
 
 const state = {
-  left:  { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null },
-  right: { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null },
+  left:  { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null, network: null },
+  right: { cwd: '/', entries: [], selected: new Set(), cursor: 0, filter: '', android: null, network: null },
   active: 'left',
   previewOpen: false,
   androidDevices: [],
@@ -84,10 +84,12 @@ async function init() {
   });
   $('btn-open-finder').addEventListener('click', () => {
     const s = state[state.active];
-    if (s.android) return; // can't open android path in Finder
+    if (s.android || s.network) return;
     const target = s.selected.size ? [...s.selected][0] : s.cwd;
     window.api.showInFinder(target);
   });
+
+  $('btn-network').addEventListener('click', () => netManager.open());
 
   // Preview close
   $('preview-close').addEventListener('click', closePreview);
@@ -177,6 +179,8 @@ async function navigate(side, dirPath) {
     let entries;
     if (s.android) {
       entries = await window.api.adbReaddir(s.android.serial, dirPath);
+    } else if (s.network) {
+      entries = await window.api.netReaddir(s.network.id, dirPath);
     } else {
       entries = await window.api.readdir(dirPath);
     }
@@ -260,10 +264,16 @@ function renderBreadcrumb(side) {
   bc.innerHTML = '';
 
   if (s.android) {
-    const androidLabel = document.createElement('span');
-    androidLabel.className = 'bc-part bc-android';
-    androidLabel.textContent = `📱 ${s.android.serial}`;
-    bc.appendChild(androidLabel);
+    const lbl = document.createElement('span');
+    lbl.className = 'bc-part bc-android';
+    lbl.textContent = `📱 ${s.android.serial}`;
+    bc.appendChild(lbl);
+  }
+  if (s.network) {
+    const lbl = document.createElement('span');
+    lbl.className = 'bc-part bc-network';
+    lbl.textContent = `🌐 ${s.network.name}`;
+    bc.appendChild(lbl);
   }
 
   const rootSpan = document.createElement('span');
@@ -291,7 +301,7 @@ function renderBreadcrumb(side) {
 
 function updateStatus(side) {
   const s = state[side];
-  const prefix = s.android ? `📱 Android · ` : '';
+  const prefix = s.android ? `📱 Android · ` : s.network ? `🌐 ${s.network.name} · ` : '';
   const dirs  = s.entries.filter(e => e.isDirectory).length;
   const files = s.entries.filter(e => !e.isDirectory).length;
   const selCount = s.selected.size;
@@ -350,14 +360,9 @@ async function handleRowDblClick(side, entry) {
   }
 
   if (s.android) {
-    // Symlinks may point to directories — try navigating first
     if (entry.isSymlink) {
-      try {
-        await navigate(side, fullPath);
-        return;
-      } catch { /* not a directory, fall through to file open */ }
+      try { await navigate(side, fullPath); return; } catch {}
     }
-    // Pull file to temp and open; use basename of fullPath to avoid any slashes in name
     const safeName = fullPath.split('/').pop() || 'file';
     const tmp = `/tmp/adb_open_${Date.now()}_${safeName}`;
     try {
@@ -366,6 +371,16 @@ async function handleRowDblClick(side, entry) {
       dom.statusbar.textContent = `Opened ${entry.name} from Android (temp copy).`;
     } catch (err) {
       dom.statusbar.textContent = `Error opening file: ${err.message}`;
+    }
+  } else if (s.network) {
+    const safeName = fullPath.split('/').pop() || 'file';
+    const tmp = `/tmp/cpm_net_${Date.now()}_${safeName}`;
+    try {
+      await window.api.netDownload(s.network.id, fullPath, tmp);
+      await window.api.open(tmp);
+      dom.statusbar.textContent = `Opened ${entry.name} from ${s.network.name}`;
+    } catch (err) {
+      dom.statusbar.textContent = `Error: ${err.message}`;
     }
   } else {
     await window.api.open(fullPath);
@@ -472,26 +487,50 @@ async function operationCopyMove(op) {
   try {
     for (const t of targets) {
       const destPath = path.join(dst.cwd, path.basename(t));
+      const tmp = `/tmp/cpm_xfer_${Date.now()}_${path.basename(t)}`;
 
-      if (!src.android && !dst.android) {
-        // local → local
+      // Helper flags
+      const srcLocal   = !src.android && !src.network;
+      const dstLocal   = !dst.android && !dst.network;
+
+      if (srcLocal && dstLocal) {
         if (op === 'copy') await window.api.copy(t, destPath);
         else               await window.api.move(t, destPath);
-      } else if (src.android && !dst.android) {
-        // android → local (pull)
+
+      } else if (src.android && dstLocal) {
         await window.api.adbPull(src.android.serial, t, destPath);
         if (op === 'move') await window.api.adbDelete(src.android.serial, t);
-      } else if (!src.android && dst.android) {
-        // local → android (push)
+
+      } else if (srcLocal && dst.android) {
         await window.api.adbPush(dst.android.serial, t, destPath);
         if (op === 'move') await window.api.delete(t);
-      } else {
-        // android → android (pull to tmp, push)
-        const tmp = `/tmp/adb_xfer_${Date.now()}_${path.basename(t)}`;
+
+      } else if (src.network && dstLocal) {
+        await window.api.netDownload(src.network.id, t, destPath);
+        if (op === 'move') await window.api.netDelete(src.network.id, t);
+
+      } else if (srcLocal && dst.network) {
+        await window.api.netUpload(dst.network.id, t, destPath);
+        if (op === 'move') await window.api.delete(t);
+
+      } else if (src.android && dst.network) {
         await window.api.adbPull(src.android.serial, t, tmp);
-        await window.api.adbPush(dst.android.serial, tmp, destPath);
+        await window.api.netUpload(dst.network.id, tmp, destPath);
         await window.api.delete(tmp);
         if (op === 'move') await window.api.adbDelete(src.android.serial, t);
+
+      } else if (src.network && dst.android) {
+        await window.api.netDownload(src.network.id, t, tmp);
+        await window.api.adbPush(dst.android.serial, tmp, destPath);
+        await window.api.delete(tmp);
+        if (op === 'move') await window.api.netDelete(src.network.id, t);
+
+      } else {
+        // network → network (or same network)
+        await window.api.netDownload(src.network.id, t, tmp);
+        await window.api.netUpload(dst.network.id, tmp, destPath);
+        await window.api.delete(tmp);
+        if (op === 'move') await window.api.netDelete(src.network.id, t);
       }
     }
     await reload('left'); await reload('right');
@@ -519,8 +558,9 @@ async function operationDelete() {
 
   try {
     for (const t of targets) {
-      if (s.android) await window.api.adbDelete(s.android.serial, t);
-      else           await window.api.delete(t);
+      if (s.android)      await window.api.adbDelete(s.android.serial, t);
+      else if (s.network) await window.api.netDelete(s.network.id, t);
+      else                await window.api.delete(t);
     }
     await reload(state.active);
     dom.statusbar.textContent = `Deleted ${targets.length} item(s).`;
@@ -539,8 +579,9 @@ async function operationRename() {
   const oldPath = path.join(s.cwd, cur.name);
   const newPath = path.join(s.cwd, newName);
   try {
-    if (s.android) await window.api.adbRename(s.android.serial, oldPath, newPath);
-    else           await window.api.rename(oldPath, newPath);
+    if (s.android)      await window.api.adbRename(s.android.serial, oldPath, newPath);
+    else if (s.network) await window.api.netRename(s.network.id, oldPath, newPath);
+    else                await window.api.rename(oldPath, newPath);
     await reload(state.active);
     dom.statusbar.textContent = `Renamed to ${newName}`;
   } catch (err) {
@@ -554,8 +595,9 @@ async function operationNewFolder() {
   if (!name) return;
   const newPath = path.join(s.cwd, name);
   try {
-    if (s.android) await window.api.adbMkdir(s.android.serial, newPath);
-    else           await window.api.mkdir(newPath);
+    if (s.android)      await window.api.adbMkdir(s.android.serial, newPath);
+    else if (s.network) await window.api.netMkdir(s.network.id, newPath);
+    else                await window.api.mkdir(newPath);
     await reload(state.active);
     dom.statusbar.textContent = `Created folder: ${name}`;
   } catch (err) {
@@ -573,7 +615,7 @@ async function togglePreview() {
   if (!cur || cur.isDirectory) return;
 
   const filePath = path.join(s.cwd, cur.name);
-  dom.previewFile.textContent = (s.android ? '📱 ' : '') + cur.name;
+  dom.previewFile.textContent = (s.android ? '📱 ' : s.network ? '🌐 ' : '') + cur.name;
   dom.previewContent.innerHTML = '<div class="preview-loading">Loading…</div>';
   dom.preview.classList.add('open');
   state.previewOpen = true;
@@ -588,11 +630,9 @@ async function togglePreview() {
 
   try {
     let text;
-    if (s.android) {
-      text = await window.api.adbReadfile(s.android.serial, filePath);
-    } else {
-      text = await window.api.readfile(filePath);
-    }
+    if (s.android)      text = await window.api.adbReadfile(s.android.serial, filePath);
+    else if (s.network) text = await window.api.netReadfile(s.network.id, filePath);
+    else                text = await window.api.readfile(filePath);
     if (text === null) {
       dom.previewContent.innerHTML = '<div class="preview-loading">File too large to preview.</div>';
       return;
@@ -720,6 +760,197 @@ function getFileIcon(name) {
   };
   return map[ext] || '📄';
 }
+
+// ── Network Manager ───────────────────────────────────────────────────────────
+
+const netManager = (() => {
+  const PROTOCOL_ICONS = { sftp: '🔒', ftp: '📡', ftps: '🔐', smb: '🖥️' };
+  const PROTOCOL_PORTS = { sftp: 22, ftp: 21, ftps: 21, smb: 445 };
+
+  let connections = [];
+  let editingId = null;
+  const activeSessions = new Set(); // connected connection IDs
+
+  const el = {
+    backdrop: $('net-modal-backdrop'),
+    connList: $('net-conn-list'),
+    formTitle:$('net-form-title'),
+    addBtn:   $('net-add-btn'),
+    cancelBtn:$('net-cancel-btn'),
+    testBtn:  $('net-test-btn'),
+    connectBtn:$('net-connect-btn'),
+    deleteBtn:$('net-delete-btn'),
+    status:   $('net-status'),
+    // form fields
+    name:     $('net-name'),
+    protocol: $('net-protocol'),
+    host:     $('net-host'),
+    port:     $('net-port'),
+    share:    $('net-share'),
+    shareField:$('net-share-field'),
+    username: $('net-username'),
+    password: $('net-password'),
+    startPath:$('net-path'),
+  };
+
+  function init() {
+    el.addBtn.addEventListener('click', () => loadForm(null));
+    el.cancelBtn.addEventListener('click', close);
+    el.backdrop.addEventListener('click', e => { if (e.target === el.backdrop) close(); });
+    el.deleteBtn.addEventListener('click', deleteCurrent);
+    el.testBtn.addEventListener('click', testConnection);
+    el.connectBtn.addEventListener('click', connectCurrent);
+    el.protocol.addEventListener('change', () => {
+      el.shareField.style.display = el.protocol.value === 'smb' ? '' : 'none';
+    });
+  }
+
+  async function open() {
+    connections = await window.api.netListConnections();
+    renderList();
+    loadForm(null);
+    el.backdrop.hidden = false;
+  }
+
+  function close() { el.backdrop.hidden = true; }
+
+  function renderList() {
+    el.connList.innerHTML = '';
+    if (!connections.length) {
+      el.connList.innerHTML = '<div style="padding:16px;color:var(--text-dim);font-size:11px;text-align:center">No saved connections.<br>Click + New to add one.</div>';
+      return;
+    }
+    for (const c of connections) {
+      const div = document.createElement('div');
+      div.className = 'net-conn-item' + (c.id === editingId ? ' active' : '') + (activeSessions.has(c.id) ? ' connected' : '');
+      div.innerHTML = `
+        <span class="net-conn-icon">${PROTOCOL_ICONS[c.protocol] || '🌐'}</span>
+        <span class="net-conn-info">
+          <div class="net-conn-name">${escHtml(c.name)}</div>
+          <div class="net-conn-host">${escHtml(c.protocol.toUpperCase())} · ${escHtml(c.host)}</div>
+        </span>
+        ${activeSessions.has(c.id) ? '<span class="net-conn-badge">ON</span>' : ''}
+      `;
+      div.addEventListener('click', () => loadForm(c));
+      el.connList.appendChild(div);
+    }
+  }
+
+  function loadForm(conn) {
+    editingId = conn ? conn.id : null;
+    el.formTitle.textContent = conn ? `Edit — ${conn.name}` : 'New Connection';
+    el.name.value     = conn ? conn.name     : '';
+    el.protocol.value = conn ? conn.protocol : 'sftp';
+    el.host.value     = conn ? conn.host     : '';
+    el.port.value     = conn ? (conn.port || '') : '';
+    el.share.value    = conn ? (conn.share   || '') : '';
+    el.username.value = conn ? conn.username : '';
+    el.password.value = conn ? conn.password : '';
+    el.startPath.value= conn ? (conn.startPath || '') : '';
+    el.deleteBtn.hidden = !conn;
+    el.shareField.style.display = el.protocol.value === 'smb' ? '' : 'none';
+    el.status.textContent = '';
+    el.status.className = 'net-status';
+    renderList();
+  }
+
+  function getFormConn() {
+    return {
+      id:        editingId || `conn_${Date.now()}`,
+      name:      el.name.value.trim() || el.host.value,
+      protocol:  el.protocol.value,
+      host:      el.host.value.trim(),
+      port:      parseInt(el.port.value) || PROTOCOL_PORTS[el.protocol.value],
+      share:     el.share.value.trim(),
+      username:  el.username.value.trim(),
+      password:  el.password.value,
+      startPath: el.startPath.value.trim() || '/',
+    };
+  }
+
+  async function testConnection() {
+    const conn = getFormConn();
+    if (!conn.host) { setStatus('Enter a host first.', 'err'); return; }
+    setStatus('Connecting…', 'busy');
+    try {
+      await window.api.netConnect(conn);
+      await window.api.netDisconnect(conn.id);
+      setStatus('✓ Connection successful!', 'ok');
+    } catch (err) {
+      setStatus(`✗ ${err.message}`, 'err');
+    }
+  }
+
+  async function connectCurrent() {
+    const conn = getFormConn();
+    if (!conn.host) { setStatus('Enter a host to connect.', 'err'); return; }
+    setStatus('Connecting…', 'busy');
+    // Save first
+    connections = await window.api.netSaveConnection(conn);
+    editingId = conn.id;
+    try {
+      const result = await window.api.netConnect(conn);
+      activeSessions.add(conn.id);
+      setStatus('✓ Connected!', 'ok');
+      renderList();
+
+      // Open in active pane
+      const startPath = (conn.protocol === 'smb' && result.mountPath)
+        ? result.mountPath
+        : (conn.startPath || '/');
+
+      const side = state.active;
+      if (conn.protocol === 'smb' && result.mountPath) {
+        // SMB: browse as local filesystem at mount point
+        state[side].network = null;
+        state[side].android = null;
+        await navigate(side, result.mountPath);
+        // Add to drive list as a local path
+        addNetworkDrive(side, conn, result.mountPath);
+      } else {
+        state[side].network = { id: conn.id, name: conn.name, protocol: conn.protocol };
+        state[side].android = null;
+        await navigate(side, startPath);
+      }
+      close();
+    } catch (err) {
+      setStatus(`✗ ${err.message}`, 'err');
+    }
+  }
+
+  async function deleteCurrent() {
+    if (!editingId) return;
+    const ok = await window.api.confirm('Delete this connection?', el.name.value);
+    if (!ok) return;
+    await window.api.netDisconnect(editingId);
+    activeSessions.delete(editingId);
+    connections = await window.api.netDeleteConnection(editingId);
+    editingId = null;
+    loadForm(null);
+    renderList();
+  }
+
+  function addNetworkDrive(side, conn, mountPath) {
+    const sel = dom.drive(side);
+    // Remove existing entry for this connection if any
+    const existing = sel.querySelector(`option[data-netid="${conn.id}"]`);
+    if (existing) existing.remove();
+    const opt = document.createElement('option');
+    opt.value = mountPath;
+    opt.textContent = `🌐 ${conn.name}`;
+    opt.dataset.netid = conn.id;
+    sel.appendChild(opt);
+    sel.value = mountPath;
+  }
+
+  function setStatus(msg, cls) {
+    el.status.textContent = msg;
+    el.status.className = `net-status ${cls}`;
+  }
+
+  init();
+  return { open, activeSessions };
+})();
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
