@@ -4,6 +4,75 @@ const fs = require('fs');
 const os = require('os');
 const { execFile, spawn } = require('child_process');
 
+// ── iPhone (libimobiledevice + ifuse) ────────────────────────────────────────
+
+const IDEVICEID   = '/opt/homebrew/bin/ideviceid';
+const IDEVICEINFO = '/opt/homebrew/bin/ideviceinfo';
+const IFUSE       = '/opt/homebrew/bin/ifuse';
+
+// Mounted iPhones: udid → mountPoint
+const iphoneMounts = {};
+
+function idevice(...args) {
+  return new Promise((resolve, reject) => {
+    execFile(IDEVICEID, args, { timeout: 5000 }, (err, stdout) => {
+      if (err) reject(new Error(err.message));
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+function ideviceInfo(udid, key) {
+  return new Promise((resolve) => {
+    execFile(IDEVICEINFO, ['-u', udid, '-k', key], { timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : stdout.trim());
+    });
+  });
+}
+
+ipcMain.handle('iphone:devices', async () => {
+  try {
+    const out = await idevice('-l');
+    if (!out) return [];
+    const udids = out.split('\n').map(s => s.trim()).filter(Boolean);
+    const devices = [];
+    for (const udid of udids) {
+      const name  = await ideviceInfo(udid, 'DeviceName')  || 'iPhone';
+      const model = await ideviceInfo(udid, 'ProductType') || '';
+      const trust = await ideviceInfo(udid, 'ProductVersion');
+      devices.push({ udid, name, model, trusted: !!trust });
+    }
+    return devices;
+  } catch { return []; }
+});
+
+ipcMain.handle('iphone:mount', async (_, udid) => {
+  if (iphoneMounts[udid]) return { mountPath: iphoneMounts[udid] };
+  const mountPoint = path.join(os.tmpdir(), `cpm_iphone_${udid}`);
+  fs.mkdirSync(mountPoint, { recursive: true });
+  await new Promise((resolve, reject) => {
+    execFile(IFUSE, ['--udid', udid, mountPoint], { timeout: 15000 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve();
+    });
+  });
+  iphoneMounts[udid] = mountPoint;
+  return { mountPath: mountPoint };
+});
+
+ipcMain.handle('iphone:unmount', async (_, udid) => {
+  const mp = iphoneMounts[udid];
+  if (!mp) return;
+  await new Promise(r => execFile('umount', [mp], () => r()));
+  delete iphoneMounts[udid];
+});
+
+app.on('before-quit', () => {
+  for (const [, mp] of Object.entries(iphoneMounts)) {
+    try { require('child_process').execFileSync('umount', [mp]); } catch {}
+  }
+});
+
 // ── Network (lazy-loaded) ─────────────────────────────────────────────────────
 let SftpClient = null;
 let ftp = null;

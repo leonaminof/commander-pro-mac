@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('api', {
   // Progress events
   onProgress: (cb) => ipcRenderer.on('progress:update', (_, data) => cb(data)),
 
+  // iPhone (libimobiledevice + ifuse)
+  iphoneDevices: ()        => ipcRenderer.invoke('iphone:devices'),
+  iphoneMount:   (udid)    => ipcRenderer.invoke('iphone:mount', udid),
+  iphoneUnmount: (udid)    => ipcRenderer.invoke('iphone:unmount', udid),
+
   // Android (ADB)
   adbDevices:  ()              => ipcRenderer.invoke('adb:devices'),
   adbReaddir:  (s, p)          => ipcRenderer.invoke('adb:readdir', s, p),

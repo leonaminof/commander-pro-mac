@@ -57,8 +57,9 @@ async function init() {
   const home = await window.api.homedir();
   const volumes = await window.api.volumes();
 
-  // Detect Android devices
+  // Detect Android + iPhone devices
   await refreshAndroidDevices(volumes);
+  await refreshIphoneDevices();
 
   for (const side of ['left', 'right']) {
     dom.drive(side).addEventListener('change', e => handleDriveChange(side, e.target.value));
@@ -70,6 +71,13 @@ async function init() {
     document.querySelectorAll(`#android-quicknav-${side} .aqn-btn`).forEach(btn => {
       btn.addEventListener('click', () => navigate(side, btn.dataset.path));
     });
+
+    // iPhone quick-nav buttons (path is set dynamically when device mounts)
+    document.querySelectorAll(`#iphone-quicknav-${side} .aqn-btn`).forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.path) navigate(side, btn.dataset.path);
+      });
+    });
   }
 
   // Toolbar
@@ -80,6 +88,7 @@ async function init() {
   $('btn-new-folder').addEventListener('click', () => operationNewFolder());
   $('btn-refresh').addEventListener('click',    async () => {
     await refreshAndroidDevices();
+    await refreshIphoneDevices();
     reload('left'); reload('right');
   });
   $('btn-open-finder').addEventListener('click', () => {
@@ -164,9 +173,34 @@ async function handleDriveChange(side, val) {
       return;
     }
     state[side].android = { serial };
+    state[side].network = null;
     await navigate(side, '/sdcard');
+
+  } else if (val.startsWith('iphone:')) {
+    const udid = val.replace('iphone:', '');
+    const device = _iphoneDevices.find(d => d.udid === udid);
+    if (!device) return;
+    if (!device.trusted) {
+      dom.status(side).textContent = `Tap "Trust" on your iPhone when prompted, then click Refresh.`;
+      return;
+    }
+    dom.status(side).textContent = `Mounting iPhone…`;
+    try {
+      const { mountPath } = await window.api.iphoneMount(udid);
+      state[side].android = null;
+      state[side].network = null;
+      // iPhone mounts as local filesystem — browse it directly
+      await navigate(side, mountPath);
+      updateIphoneQuicknav(side, mountPath);
+      dom.status(side).textContent = `📱 ${device.name} mounted`;
+    } catch (err) {
+      dom.status(side).textContent = `Mount failed: ${err.message}`;
+    }
+
   } else {
     state[side].android = null;
+    state[side].network = null;
+    updateIphoneQuicknav(side, null);
     await navigate(side, val);
   }
 }
@@ -323,6 +357,20 @@ function updateActivePaneStyle() {
 function updateAndroidQuicknav(side) {
   const qn = $(`android-quicknav-${side}`);
   qn.hidden = !state[side].android;
+  $(`iphone-quicknav-${side}`).hidden = true;
+}
+
+let _iphoneMountPath = { left: null, right: null };
+
+function updateIphoneQuicknav(side, mountPath) {
+  _iphoneMountPath[side] = mountPath;
+  const qn = $(`iphone-quicknav-${side}`);
+  qn.hidden = !mountPath;
+  if (mountPath) {
+    qn.querySelectorAll('.aqn-btn').forEach(btn => {
+      btn.dataset.path = mountPath + btn.dataset.rel;
+    });
+  }
 }
 
 // ── Row interaction ───────────────────────────────────────────────────────────
@@ -670,6 +718,18 @@ function resolveModal(value) {
 // ── Drives ────────────────────────────────────────────────────────────────────
 
 let _volumes = [];
+let _iphoneDevices = [];
+
+async function refreshIphoneDevices() {
+  try {
+    _iphoneDevices = await window.api.iphoneDevices();
+  } catch {
+    _iphoneDevices = [];
+  }
+  for (const side of ['left', 'right']) {
+    populateDrives(side, _volumes, state.androidDevices);
+  }
+}
 
 function populateDrives(side, volumes, androidDevices = []) {
   _volumes = volumes;
@@ -685,9 +745,16 @@ function populateDrives(side, volumes, androidDevices = []) {
     return `<option value="android:${escAttr(d.serial)}">${escHtml(label)}</option>`;
   }).join('');
 
-  sel.innerHTML = localOpts + (androidOpts
-    ? `<optgroup label="── Android ──">${androidOpts}</optgroup>`
-    : '');
+  const iphoneOpts = _iphoneDevices.map(d => {
+    const label = d.trusted
+      ? `📱 ${d.name}`
+      : `📱 ${d.name} — tap Trust on iPhone`;
+    return `<option value="iphone:${escAttr(d.udid)}">${escHtml(label)}</option>`;
+  }).join('');
+
+  sel.innerHTML = localOpts
+    + (androidOpts ? `<optgroup label="── Android ──">${androidOpts}</optgroup>` : '')
+    + (iphoneOpts  ? `<optgroup label="── iPhone ──">${iphoneOpts}</optgroup>`   : '');
 }
 
 function getVolumeForPath(p) {

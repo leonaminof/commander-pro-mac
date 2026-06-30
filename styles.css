@@ -211,6 +211,26 @@ html, body {
 }
 .aqn-btn:hover { background: rgba(166,227,161,.22); }
 
+/* iPhone quick-nav — silver/blue tint */
+.iphone-quicknav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(137,180,250,.07);
+  border-bottom: 1px solid rgba(137,180,250,.2);
+  flex-wrap: wrap;
+}
+.iphone-quicknav .aqn-label {
+  color: var(--accent);
+}
+.iphone-quicknav .aqn-btn {
+  background: rgba(137,180,250,.1);
+  border-color: rgba(137,180,250,.25);
+  color: var(--accent);
+}
+.iphone-quicknav .aqn-btn:hover { background: rgba(137,180,250,.22); }
+
 /* ── File list header ──────────────────────────────────────── */
 .file-list-header {
   display: flex;
