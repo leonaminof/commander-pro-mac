@@ -1,0 +1,28 @@
+{
+  "name": "commander-pro-mac",
+  "version": "1.0.0",
+  "description": "Dual-pane file manager for macOS, inspired by Commander Pro",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-packager . 'Commander Pro' --platform=darwin --arch=arm64 --out=dist --overwrite --icon=assets/icon.icns",
+    "build": "electron-builder --mac"
+  },
+  "dependencies": {
+    "ssh2-sftp-client": "^10.0.3",
+    "basic-ftp": "^5.0.5"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0",
+    "electron-packager": "^17.0.0"
+  },
+  "build": {
+    "appId": "com.leonam.commanderpro",
+    "productName": "Commander Pro",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": ["dmg", "zip"]
+    }
+  }
+}
